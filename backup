@@ -1,0 +1,28 @@
+#!/bin/bash
+set -e
+
+SERVER="user@server:/path/to/workdir/"
+ARCHIVE="/path/to/archive_backup/"
+MIRROR="/path/to/mirror_backup/"
+SSH_KEY="path/to/ssh_key"
+
+echo "Archiving new binaries..."
+rsync -av --ignore-existing --progress \
+  -e "ssh -i $SSH_KEY" \
+  --exclude='*.dat' \
+  "$SERVER" "$ARCHIVE"
+
+echo "Updating .dat files in archive..."
+rsync -av --delete --progress \
+  -e "ssh -i $SSH_KEY" \
+  --include='*/' \
+  --include='*.dat' \
+  --exclude='*' \
+  "$SERVER" "$ARCHIVE"
+
+echo "Creating mirror backup..."
+rsync -av --delete --progress \
+  -e "ssh -i $SSH_KEY" \
+  "$SERVER" "$MIRROR"
+
+echo "Backup completed."
