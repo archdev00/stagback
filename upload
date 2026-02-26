@@ -6,10 +6,9 @@ DRY_RUN=false        # Set to true to test (will not copy), false to actually up
 SHUTDOWN_AFTER=false # Set to true to shut down PC when finished
 
 # --- PATHS ---
-# Note: Source is now local, Destination is now remote
-LOCAL_DATA="/home/aritro/Documents/Academia/PhD/StagYY/scripts/festus/upload/"
-REMOTE_SERVER="bt732647@festus.hpc.uni-bayreuth.de:/workdir/bt732647/venus_imp3/"
-SSH_KEY="/home/aritro/.ssh/festus_key"
+LOCAL_DATA="/path/to/your/data/"
+REMOTE_SERVER="user@server.something:/path/to/your/workdir/"
+SSH_KEY="/path/to/your/ssh_key"
 
 # Handle Dry Run flag
 DRY_FLAG=""
