@@ -2,28 +2,30 @@
 set -e
 
 # --- CONFIGURATION TOGGLES ---
-RUN_MIRROR=true      # Set to true to run mirror backup, false to skip
+RUN_MIRROR=false      # Set to true to run mirror backup, false to skip
 SHUTDOWN_AFTER=false # Set to true to shut down PC when finished
 
 # --- PATHS ---
-SERVER="user@server:/path/to/workdir/"
+SERVER="user@server.com:/path/to/workdir/"
 ARCHIVE="/path/to/archive_backup/"
 MIRROR="/path/to/mirror_backup/"
-SSH_KEY="path/to/ssh_key"
+SSH_KEY="/path/to/ssh_key"
 
 # 1. Archive new binaries
 echo "Archiving new binaries..."
 rsync -av --ignore-existing --progress \
   -e "ssh -i $SSH_KEY" \
   --exclude='*.dat' \
+  --exclude='*.h5' \
   "$SERVER" "$ARCHIVE"
 
-# 2. Update .dat files
-echo "Updating .dat files in archive..."
-rsync -av --delete --progress \
+# 2. Update .dat and .h5 files (Safety measure: keep local if missing on server)
+echo "Updating .dat and .h5 files in archive..."
+rsync -av --progress \
   -e "ssh -i $SSH_KEY" \
   --include='*/' \
   --include='*.dat' \
+  --include='*.h5' \
   --exclude='*' \
   "$SERVER" "$ARCHIVE"
 
@@ -42,6 +44,8 @@ echo "Backup completed."
 # 4. Shutdown (Toggleable)
 if [ "$SHUTDOWN_AFTER" = true ]; then
     echo "Shutdown toggle is ON. System will shut down in 60 seconds."
+    # Using 'sudo' usually requires a password.
+    # To skip the password, you can configure your sudoers file for 'shutdown'.
     sudo shutdown -h +1
 else
     echo "Shutdown toggle is OFF. Keeping PC awake."
