@@ -1,7 +1,15 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+# --- FORMATTING ---
+BOLD_BLUE='\033[1;34m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
 
 # --- CONFIGURATION TOGGLES ---
+DRY_RUN=true        # Set to true to simulate without changing files
 RUN_MIRROR=false      # Set to true to run mirror backup, false to skip
 SHUTDOWN_AFTER=false # Set to true to shut down PC when finished
 
@@ -11,42 +19,89 @@ ARCHIVE="/path/to/archive_backup/"
 MIRROR="/path/to/mirror_backup/"
 SSH_KEY="/path/to/ssh_key"
 
-# 1. Archive new binaries
-echo "Archiving new binaries..."
-rsync -av --ignore-existing --progress \
-  -e "ssh -i $SSH_KEY" \
-  --exclude='*.dat' \
-  --exclude='*.h5' \
-  "$SERVER" "$ARCHIVE"
+# --- LOGGING SETUP ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DIR="$SCRIPT_DIR/backup_log"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/backup_$(date +%Y%m%d_%H%M%S).log"
 
-# 2. Update .dat and .h5 files (Safety measure: keep local if missing on server)
-echo "Updating .dat and .h5 files in archive..."
-rsync -av --progress \
-  -e "ssh -i $SSH_KEY" \
-  --include='*/' \
-  --include='*.dat' \
-  --include='*.h5' \
-  --exclude='*' \
-  "$SERVER" "$ARCHIVE"
+# --- HELPER FUNCTIONS ---
+log_step() {
+    echo -e "${BOLD_BLUE}==>${NC} ${BOLD_BLUE}$1${NC}"
+}
 
-# 3. Mirror Backup (Toggleable)
-if [ "$RUN_MIRROR" = true ]; then
-    echo "Creating mirror backup..."
-    rsync -av --delete --progress \
-      -e "ssh -i $SSH_KEY" \
-      "$SERVER" "$MIRROR"
-else
-    echo "Skipping mirror backup as per toggle."
+log_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
+
+log_skip() {
+    echo -e "${YELLOW}⏭  $1${NC}"
+}
+
+log_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+
+# --- PRE-FLIGHT CHECKS ---
+if [ "$SHUTDOWN_AFTER" = true ]; then
+    log_step "Shutdown enabled. Requesting sudo access now to avoid later prompts..."
+    sudo -v
 fi
 
-echo "Backup completed."
+# Redirect all output to log file while still showing in terminal
+exec > >(tee -i "$LOG_FILE") 2>&1
+
+echo -e "${BOLD_BLUE}Starting Backup Process...${NC}"
+echo -e "Log file: $LOG_FILE\n"
+
+# Prepare rsync options
+# --info=progress2 provides a total transfer progress summary.
+RSYNC_OPTS="-avh --info=progress2 -e \"ssh -i $SSH_KEY\""
+if [ "$DRY_RUN" = true ]; then
+    RSYNC_OPTS="$RSYNC_OPTS --dry-run"
+    log_step "DRY RUN MODE: No files will be modified."
+fi
+
+# --- MAIN EXECUTION ---
+{
+    # 1. Archive new binaries
+    log_step "Step 1/3: Archiving new binaries..."
+    eval rsync "$RSYNC_OPTS" --ignore-existing \
+      --exclude='*.dat' \
+      --exclude='*.h5' \
+      "$SERVER" "$ARCHIVE"
+
+    # 2. Update .dat and .h5 files
+    log_step "Step 2/3: Updating .dat and .h5 files in archive..."
+    eval rsync "$RSYNC_OPTS" \
+      --include='*/' \
+      --include='*.dat' \
+      --include='*.h5' \
+      --exclude='*' \
+      "$SERVER" "$ARCHIVE"
+
+    # 3. Mirror Backup (Toggleable)
+    if [ "$RUN_MIRROR" = true ]; then
+        log_step "Step 3/3: Creating mirror backup..."
+        eval rsync "$RSYNC_OPTS" --delete \
+          "$SERVER" "$MIRROR"
+    else
+        log_skip "Step 3/3: Skipping mirror backup as per toggle."
+    fi
+
+    echo ""
+    log_success "Backup completed successfully at $(date)."
+
+} || {
+    echo ""
+    log_error "Backup FAILED at $(date)."
+    exit 1
+}
 
 # 4. Shutdown (Toggleable)
-if [ "$SHUTDOWN_AFTER" = true ]; then
-    echo "Shutdown toggle is ON. System will shut down in 60 seconds."
-    # Using 'sudo' usually requires a password.
-    # To skip the password, you can configure your sudoers file for 'shutdown'.
+if [ "$SHUTDOWN_AFTER" = true ] && [ "$DRY_RUN" = false ]; then
+    log_step "Shutdown toggle is ON. System will shut down in 60 seconds."
     sudo shutdown -h +1
-else
-    echo "Shutdown toggle is OFF. Keeping PC awake."
+elif [ "$SHUTDOWN_AFTER" = true ] && [ "$DRY_RUN" = true ]; then
+    log_skip "Dry run enabled. Skipping shutdown."
 fi
