@@ -1,0 +1,88 @@
+#!/bin/bash
+set -euo pipefail
+
+# --- FORMATTING ---
+BOLD_BLUE='\033[1;34m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# --- CONFIGURATION TOGGLES ---
+DRY_RUN=false        # Set to true to simulate without changing files
+SHUTDOWN_AFTER=false # Set to true to shut down PC when finished
+
+# --- PATHS ---
+# Update these paths according to your actual source and external SSD mount point
+SOURCE="/home/aritro/Documents/Academia/PhD/StagYY/"
+SSD_DEST="/run/media/aritro/SSD_NAME/StagYY_Backup/" # Replace SSD_NAME with actual mount point
+
+# --- LOGGING SETUP ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DIR="$SCRIPT_DIR/backup_log"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/local_backup_$(date +%Y%m%d_%H%M%S).log"
+
+# --- HELPER FUNCTIONS ---
+log_step() {
+    echo -e "${BOLD_BLUE}==>${NC} ${BOLD_BLUE}$1${NC}"
+}
+
+log_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
+
+log_skip() {
+    echo -e "${YELLOW}⏭  $1${NC}"
+}
+
+log_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+
+# --- PRE-FLIGHT CHECKS ---
+if [ ! -d "$SSD_DEST" ]; then
+    log_error "Destination directory $SSD_DEST does not exist or SSD is not mounted!"
+    exit 1
+fi
+
+if [ "$SHUTDOWN_AFTER" = true ]; then
+    log_step "Shutdown enabled. Requesting sudo access now to avoid later prompts..."
+    sudo -v
+fi
+
+# Redirect all output to log file while still showing in terminal
+exec > >(tee -i "$LOG_FILE") 2>&1
+
+echo -e "${BOLD_BLUE}Starting Local Backup Process...${NC}"
+echo -e "Log file: $LOG_FILE\n"
+
+# Prepare rsync options
+# -a: archive mode, -v: verbose, -h: human-readable numbers
+RSYNC_OPTS="-avh --info=progress2"
+if [ "$DRY_RUN" = true ]; then
+    RSYNC_OPTS="$RSYNC_OPTS --dry-run"
+    log_step "DRY RUN MODE: No files will be modified."
+fi
+
+# --- MAIN EXECUTION ---
+{
+    log_step "Syncing files to external SSD..."
+    eval rsync "$RSYNC_OPTS" "$SOURCE" "$SSD_DEST"
+
+    echo ""
+    log_success "Local backup completed successfully at $(date)."
+
+} || {
+    echo ""
+    log_error "Local backup FAILED at $(date)."
+    exit 1
+}
+
+# Shutdown (Toggleable)
+if [ "$SHUTDOWN_AFTER" = true ] && [ "$DRY_RUN" = false ]; then
+    log_step "Shutdown toggle is ON. System will shut down in 60 seconds."
+    sudo shutdown -h +1
+elif [ "$SHUTDOWN_AFTER" = true ] && [ "$DRY_RUN" = true ]; then
+    log_skip "Dry run enabled. Skipping shutdown."
+fi
