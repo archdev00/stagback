@@ -14,8 +14,8 @@ SHUTDOWN_AFTER=false # Set to true to shut down PC when finished
 
 # --- PATHS ---
 # Update these paths according to your actual source and external SSD mount point
-SOURCE="/home/aritro/Documents/Academia/PhD/StagYY/"
-SSD_DEST="/run/media/aritro/SSD_NAME/StagYY_Backup/" # Replace SSD_NAME with actual mount point
+SOURCE="/run/media/aritro/f522493b-003a-404d-a839-3e0925c674b6/Aritro/StagYY/archive_runs/euler/i3D_01/archive/"
+SSD_DEST="/run/media/aritro/Extreme SSD/archive_runs/euler/i3D_01/archive/" # Replace SSD_NAME with actual mount point
 
 # --- LOGGING SETUP ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -59,25 +59,40 @@ echo -e "Log file: $LOG_FILE\n"
 
 # Prepare rsync options
 # -a: archive mode, -v: verbose, -h: human-readable numbers
-RSYNC_OPTS="-avh --info=progress2"
+# Disable owner, group, and permissions to avoid errors on external filesystems like exFAT/NTFS
+RSYNC_OPTS=(-avh --info=progress2 --no-owner --no-group --no-perms)
 if [ "$DRY_RUN" = true ]; then
-    RSYNC_OPTS="$RSYNC_OPTS --dry-run"
+    RSYNC_OPTS+=("--dry-run")
     log_step "DRY RUN MODE: No files will be modified."
 fi
 
 # --- MAIN EXECUTION ---
-{
-    log_step "Syncing files to external SSD..."
-    eval rsync "$RSYNC_OPTS" "$SOURCE" "$SSD_DEST"
+log_step "Syncing files to external SSD..."
 
-    echo ""
+# Disable set -e temporarily to handle rsync exit code manually
+set +e
+rsync "${RSYNC_OPTS[@]}" "$SOURCE" "$SSD_DEST"
+RSYNC_EXIT_CODE=$?
+set -e
+
+echo ""
+if [ $RSYNC_EXIT_CODE -eq 0 ]; then
     log_success "Local backup completed successfully at $(date)."
-
-} || {
-    echo ""
+else
     log_error "Local backup FAILED at $(date)."
+    case $RSYNC_EXIT_CODE in
+        1) log_error "Syntax or usage error." ;;
+        2) log_error "Protocol incompatibility." ;;
+        3) log_error "Errors selecting input/output files, dirs." ;;
+        10) log_error "Error in socket I/O." ;;
+        11) log_error "Error in file I/O." ;;
+        12) log_error "Error in rsync protocol data stream." ;;
+        23) log_error "Partial transfer due to error." ;;
+        24) log_error "Partial transfer due to vanished source files." ;;
+        *) log_error "rsync failed with exit code $RSYNC_EXIT_CODE." ;;
+    esac
     exit 1
-}
+fi
 
 # Shutdown (Toggleable)
 if [ "$SHUTDOWN_AFTER" = true ] && [ "$DRY_RUN" = false ]; then
