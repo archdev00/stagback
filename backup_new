@@ -1,0 +1,194 @@
+#!/bin/bash
+set -euo pipefail
+
+# --- FORMATTING ---
+BOLD_BLUE='\033[1;34m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+RED='\033[0;31m'
+NC='\033[0m' # No Color
+
+# --- CONFIGURATION TOGGLES ---
+DRY_RUN=false        # Set to true to simulate without changing files
+RUN_MIRROR=false      # Set to true to run mirror backup, false to skip
+SHUTDOWN_AFTER=false # Set to true to shut down PC when finished
+DELETE_OLD_TRACERS=true # Set to true to delete older tracers before backup
+TRACERS_TO_KEEP=40       # Number of final tracers to keep
+
+# --- PATHS ---
+SERVER="bt732647@lipwig.hpc.uni-bayreuth.de:/scratch/bt732647/hdf/"
+ARCHIVE="/home/aritro/Documents/Academia/PhD/StagYY/scripts/backup/archive/"
+MIRROR="/home/aritro/Documents/Academia/PhD/StagYY/scripts/backup/mirror"
+SSH_KEY="/home/aritro/.ssh/lipwig_key"
+
+# --- LOGGING SETUP ---
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DIR="$SCRIPT_DIR/backup_log"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/backup_$(date +%Y%m%d_%H%M%S).log"
+
+# ==========================================
+#       USER EDITS NOTHING BELOW
+# ==========================================
+
+MIN_TRACERS_TO_KEEP=35   # Safety limit locked by script author
+
+# --- HELPER FUNCTIONS ---
+log_step() {
+    echo -e "${BOLD_BLUE}==>${NC} ${BOLD_BLUE}$1${NC}"
+}
+
+log_success() {
+    echo -e "${GREEN}✓ $1${NC}"
+}
+
+log_skip() {
+    echo -e "${YELLOW}⏭  $1${NC}"
+}
+
+log_error() {
+    echo -e "${RED}✗ $1${NC}"
+}
+
+prompt_continue_backup() {
+    echo -n -e "${YELLOW}Tracer deletion was hindered or cancelled. Continue with backup anyway? (y/N): ${NC}" > /dev/tty
+    read cont_confirm < /dev/tty
+    echo "User response (continue backup): $cont_confirm"
+    if [[ $cont_confirm != [yY] && $cont_confirm != [yY][eE][sS] ]]; then
+        log_error "Backup aborted by user."
+        exit 1
+    fi
+}
+
+# --- PRE-FLIGHT CHECKS ---
+if [ "$SHUTDOWN_AFTER" = true ]; then
+    log_step "Shutdown enabled. Requesting sudo access now to avoid later prompts..."
+    sudo -v
+fi
+
+# Redirect all output to log file while still showing in terminal
+exec > >(tee -i "$LOG_FILE") 2>&1
+
+echo -e "${BOLD_BLUE}Starting Backup Process...${NC}"
+echo -e "Log file: $LOG_FILE\n"
+
+# Prepare rsync options
+# --info=progress2 provides a total transfer progress summary.
+RSYNC_OPTS="-avh --info=progress2 -e \"ssh -i $SSH_KEY\""
+if [ "$DRY_RUN" = true ]; then
+    RSYNC_OPTS="$RSYNC_OPTS --dry-run"
+    log_step "DRY RUN MODE: No files will be modified."
+fi
+
+# --- TRACER CLEANUP ---
+if [ "$DELETE_OLD_TRACERS" = true ]; then
+    log_step "Step 0: Checking for old tracers to delete..."
+    if [ "$TRACERS_TO_KEEP" -lt "$MIN_TRACERS_TO_KEEP" ]; then
+        echo -e "${YELLOW}======================================================${NC}"
+        echo -e "${RED}SAFETY OVERRIDE: TRACERS_TO_KEEP is set to $TRACERS_TO_KEEP.${NC}"
+        echo -e "StagYY restarts require the final tracer. If the latest tracer is corrupted,"
+        echo -e "you will need a history of older tracers to successfully restart the run."
+        echo -e "To prevent accidental data loss, the script is overriding your setting."
+        echo -e "${YELLOW}-> Automatically adjusting TRACERS_TO_KEEP to the safe minimum of $MIN_TRACERS_TO_KEEP...${NC}"
+        echo -e "${YELLOW}======================================================${NC}"
+        TRACERS_TO_KEEP=$MIN_TRACERS_TO_KEEP
+    fi
+    
+    SERVER_HOST="${SERVER%%:*}"
+    SERVER_PATH="${SERVER#*:}"
+    
+    set +e
+    TRACER_FILES=$(ssh -i "$SSH_KEY" "$SERVER_HOST" "find \"${SERVER_PATH}+op\" -maxdepth 1 -type f -name '*tra[0-9]*' | sort" 2>/dev/null)
+    SSH_STATUS=$?
+    set -e
+    
+    if [ $SSH_STATUS -ne 0 ]; then
+        log_error "SSH connection or directory check failed. Skipping tracer deletion."
+        prompt_continue_backup
+    else
+        if [ -z "$TRACER_FILES" ]; then
+            NUM_TRACERS=0
+        else
+            NUM_TRACERS=$(echo "$TRACER_FILES" | wc -l)
+        fi
+
+        if [ "$NUM_TRACERS" -eq 0 ]; then
+            log_skip "No tracers found in ${SERVER_PATH}+op"
+        elif [ "$NUM_TRACERS" -le "$TRACERS_TO_KEEP" ]; then
+            log_skip "Found $NUM_TRACERS tracers, which is <= $TRACERS_TO_KEEP. Nothing to delete."
+        else
+            NUM_TO_DELETE=$((NUM_TRACERS - TRACERS_TO_KEEP))
+            FILES_TO_DELETE=$(echo "$TRACER_FILES" | head -n "$NUM_TO_DELETE")
+            
+            echo -e "${YELLOW}======================================================${NC}"
+            echo -e "${YELLOW}WARNING: You have chosen to delete older tracers.${NC}"
+            echo -e "Found $NUM_TRACERS tracers. Will keep the latest $TRACERS_TO_KEEP."
+            echo -e "This will permanently delete $NUM_TO_DELETE older tracers from the server."
+            echo -e "${RED}Risk: If the latest tracers are corrupted, you might not have enough history to restart the run.${NC}"
+            echo -e "${YELLOW}======================================================${NC}"
+            
+            echo -n -e "Are you sure you want to proceed with deletion? (y/N): " > /dev/tty
+            read confirm < /dev/tty
+            echo "User response: $confirm"
+            
+            if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
+                if [ "$DRY_RUN" = true ]; then
+                    log_step "DRY RUN: Would delete $NUM_TO_DELETE tracers."
+                    echo "Would delete from: $(echo \"$FILES_TO_DELETE\" | head -n 1) to $(echo \"$FILES_TO_DELETE\" | tail -n 1)"
+                elif [ -n "$FILES_TO_DELETE" ]; then
+                    log_step "Deleting $NUM_TO_DELETE old tracers..."
+                    echo "$FILES_TO_DELETE" | ssh -i "$SSH_KEY" "$SERVER_HOST" "xargs rm -f"
+                    log_success "Old tracers deleted."
+                fi
+            else
+                log_skip "Deletion cancelled by user."
+                prompt_continue_backup
+            fi
+        fi
+    fi
+    echo ""
+fi
+
+# --- MAIN EXECUTION ---
+{
+    # 1. Archive new binaries
+    log_step "Step 1/3: Archiving new binaries..."
+    eval rsync "$RSYNC_OPTS" --ignore-existing \
+      --exclude='*.dat' \
+      --exclude='*.h5' \
+      "$SERVER" "$ARCHIVE"
+
+    # 2. Update .dat and .h5 files
+    log_step "Step 2/3: Updating .dat and .h5 files in archive..."
+    eval rsync "$RSYNC_OPTS" \
+      --include='*/' \
+      --include='*.dat' \
+      --include='*.h5' \
+      --exclude='*' \
+      "$SERVER" "$ARCHIVE"
+
+    # 3. Mirror Backup (Toggleable)
+    if [ "$RUN_MIRROR" = true ]; then
+        log_step "Step 3/3: Creating mirror backup..."
+        eval rsync "$RSYNC_OPTS" --delete \
+          "$SERVER" "$MIRROR"
+    else
+        log_skip "Step 3/3: Skipping mirror backup as per toggle."
+    fi
+
+    echo ""
+    log_success "Backup completed successfully at $(date)."
+
+} || {
+    echo ""
+    log_error "Backup FAILED at $(date)."
+    exit 1
+}
+
+# 4. Shutdown (Toggleable)
+if [ "$SHUTDOWN_AFTER" = true ] && [ "$DRY_RUN" = false ]; then
+    log_step "Shutdown toggle is ON. System will shut down in 60 seconds."
+    sudo shutdown -h +1
+elif [ "$SHUTDOWN_AFTER" = true ] && [ "$DRY_RUN" = true ]; then
+    log_skip "Dry run enabled. Skipping shutdown."
+fi
