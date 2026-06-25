@@ -29,15 +29,15 @@ log_step() {
 }
 
 log_success() {
-    echo -e "${GREEN}✓ $1${NC}"
+    echo -e "${GREEN}[OK] $1${NC}"
 }
 
 log_skip() {
-    echo -e "${YELLOW}⏭  $1${NC}"
+    echo -e "${YELLOW}[SKIP] $1${NC}"
 }
 
 log_error() {
-    echo -e "${RED}✗ $1${NC}"
+    echo -e "${RED}[ERROR] $1${NC}"
 }
 
 # --- PRE-FLIGHT CHECKS ---
@@ -51,16 +51,22 @@ if [ "$SHUTDOWN_AFTER" = true ]; then
     sudo -v
 fi
 
-# Redirect all output to log file while still showing in terminal
-exec > >(tee -i "$LOG_FILE") 2>&1
+# Open FD 3 to process all text (stripping colors) into the log file
+exec 3> >(sed 's/\x1B\[[0-9;]*[a-zA-Z]//g' > "$LOG_FILE")
+
+# Redirect standard output to BOTH the terminal and the log file
+exec > >(tee -i >(cat >&3))
+
+# Redirect standard error ONLY to the log file (hides system warnings from terminal)
+exec 2>&3
 
 echo -e "${BOLD_BLUE}Starting Local Backup Process...${NC}"
 echo -e "Log file: $LOG_FILE\n"
 
 # Prepare rsync options
-# -a: archive mode, -v: verbose, -h: human-readable numbers
 # Disable owner, group, and permissions to avoid errors on external filesystems like exFAT/NTFS
-RSYNC_OPTS=(-avh --info=progress2 --no-owner --no-group --no-perms)
+RSYNC_LOG="$LOG_DIR/local_rsync_details_$(date +%Y%m%d_%H%M%S).log"
+RSYNC_OPTS=(-ah --info=progress2 --log-file="$RSYNC_LOG" --no-owner --no-group --no-perms)
 if [ "$DRY_RUN" = true ]; then
     RSYNC_OPTS+=("--dry-run")
     log_step "DRY RUN MODE: No files will be modified."
