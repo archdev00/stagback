@@ -10,15 +10,15 @@ NC='\033[0m' # No Color
 
 # --- CONFIGURATION TOGGLES ---
 DRY_RUN=false        # Set to true to simulate without changing files
-RUN_MIRROR=false      # Set to true to run mirror backup, false to skip
+RUN_MIRROR=true      # Set to true to run mirror backup, false to skip
 SHUTDOWN_AFTER=false # Set to true to shut down PC when finished
 DELETE_OLD_TRACERS=true # Set to true to delete older tracers before backup
 TRACERS_TO_KEEP=40       # Number of final tracers to keep
 
 # --- PATHS ---
 SERVER="bt732647@lipwig.hpc.uni-bayreuth.de:/scratch/bt732647/hdf/"
-ARCHIVE="/home/aritro/Documents/Academia/PhD/StagYY/scripts/backup/archive/"
-MIRROR="/home/aritro/Documents/Academia/PhD/StagYY/scripts/backup/mirror"
+ARCHIVE="/run/media/aritro/f522493b-003a-404d-a839-3e0925c674b6/Aritro/StagYY/archive_runs/lipwig/hdf/archive/"
+MIRROR="/run/media/aritro/f522493b-003a-404d-a839-3e0925c674b6/Aritro/StagYY/archive_runs/lipwig/hdf/mirror"
 SSH_KEY="/home/aritro/.ssh/lipwig_key"
 
 # --- LOGGING SETUP ---
@@ -39,15 +39,15 @@ log_step() {
 }
 
 log_success() {
-    echo -e "${GREEN}✓ $1${NC}"
+    echo -e "${GREEN}[OK] $1${NC}"
 }
 
 log_skip() {
-    echo -e "${YELLOW}⏭  $1${NC}"
+    echo -e "${YELLOW}[SKIP] $1${NC}"
 }
 
 log_error() {
-    echo -e "${RED}✗ $1${NC}"
+    echo -e "${RED}[ERROR] $1${NC}"
 }
 
 prompt_continue_backup() {
@@ -66,15 +66,22 @@ if [ "$SHUTDOWN_AFTER" = true ]; then
     sudo -v
 fi
 
-# Redirect all output to log file while still showing in terminal
-exec > >(tee -i "$LOG_FILE") 2>&1
+# Open FD 3 to process all text (stripping colors) into the log file
+exec 3> >(sed 's/\x1B\[[0-9;]*[a-zA-Z]//g' > "$LOG_FILE")
+
+# Redirect standard output to BOTH the terminal and the log file
+exec > >(tee -i >(cat >&3))
+
+# Redirect standard error ONLY to the log file (hides messy SSH/system warnings from terminal)
+exec 2>&3
 
 echo -e "${BOLD_BLUE}Starting Backup Process...${NC}"
 echo -e "Log file: $LOG_FILE\n"
 
 # Prepare rsync options
 # --info=progress2 provides a total transfer progress summary.
-RSYNC_OPTS="-avh --info=progress2 -e \"ssh -i $SSH_KEY\""
+RSYNC_LOG="$LOG_DIR/rsync_details_$(date +%Y%m%d_%H%M%S).log"
+RSYNC_OPTS="-ah --info=progress2 --log-file=\"$RSYNC_LOG\" -e \"ssh -i $SSH_KEY\""
 if [ "$DRY_RUN" = true ]; then
     RSYNC_OPTS="$RSYNC_OPTS --dry-run"
     log_step "DRY RUN MODE: No files will be modified."
@@ -122,8 +129,12 @@ if [ "$DELETE_OLD_TRACERS" = true ]; then
             
             echo -e "${YELLOW}======================================================${NC}"
             echo -e "${YELLOW}WARNING: You have chosen to delete older tracers.${NC}"
-            echo -e "Found $NUM_TRACERS tracers. Will keep the latest $TRACERS_TO_KEEP."
-            echo -e "This will permanently delete $NUM_TO_DELETE older tracers from the server."
+            echo -e "Total physical tracer files found: $NUM_TRACERS"
+            echo -e "Target physical files to keep: $TRACERS_TO_KEEP"
+            echo -e "Number of oldest tracers to delete: $NUM_TO_DELETE"
+            echo -e ""
+            echo -e "Note: This preserves exactly $TRACERS_TO_KEEP most recent files, regardless of numbering gaps."
+            echo -e "This will permanently delete exactly $NUM_TO_DELETE older tracers from the server."
             echo -e "${RED}Risk: If the latest tracers are corrupted, you might not have enough history to restart the run.${NC}"
             echo -e "${YELLOW}======================================================${NC}"
             
