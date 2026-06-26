@@ -66,7 +66,8 @@ log_error() {
 }
 
 prompt_continue_backup() {
-    echo -n -e "${YELLOW}Tracer deletion was hindered or cancelled. Continue with backup anyway? (y/N): ${NC}" > /dev/tty
+    local reason="${1:-A deletion step was hindered or cancelled.}"
+    echo -n -e "${YELLOW}${reason} Continue with backup anyway? (y/N): ${NC}" > /dev/tty
     read cont_confirm < /dev/tty
     echo "User response (continue backup): $cont_confirm"
     if [[ $cont_confirm != [yY] && $cont_confirm != [yY][eE][sS] ]]; then
@@ -82,7 +83,13 @@ OUTPUTS_FILES_TO_DELETE=""
 if [ "$DELETE_OLD_OUTPUTS" = true ]; then
     log_step "Pre-flight: Checking for old output files to delete..."
     if [ "$OUTPUTS_TO_KEEP" -lt "$MIN_OUTPUTS_TO_KEEP" ]; then
+        echo -e "${YELLOW}======================================================${NC}"
+        echo -e "${RED}SAFETY OVERRIDE: OUTPUTS_TO_KEEP is set to $OUTPUTS_TO_KEEP.${NC}"
+        echo -e "A minimum history of output files is strongly recommended for analysis."
+        echo -e "If the most recent files are corrupted, you will need older outputs."
+        echo -e "To prevent accidental data loss, the script is overriding your setting."
         echo -e "${YELLOW}-> Automatically adjusting OUTPUTS_TO_KEEP to the safe minimum of $MIN_OUTPUTS_TO_KEEP...${NC}"
+        echo -e "${YELLOW}======================================================${NC}"
         OUTPUTS_TO_KEEP=$MIN_OUTPUTS_TO_KEEP
     fi
 
@@ -93,6 +100,7 @@ if [ "$DELETE_OLD_OUTPUTS" = true ]; then
     
     if [ $SSH_STATUS -ne 0 ]; then
          log_error "SSH check failed. Output deletion will be skipped."
+         prompt_continue_backup "Output deletion was hindered."
     elif [ -z "$ALL_OUTPUTS" ]; then
          log_skip "No 5-digit output files found in ${SERVER_PATH}+op"
     else
@@ -102,30 +110,39 @@ if [ "$DELETE_OLD_OUTPUTS" = true ]; then
              log_skip "Found $NUM_STEPS total timesteps, which is <= $OUTPUTS_TO_KEEP. Nothing to delete."
          else
              NUM_STEPS_TO_DELETE=$((NUM_STEPS - OUTPUTS_TO_KEEP))
-             STEPS_TO_DELETE=$(echo "$UNIQUE_STEPS" | head -n "$NUM_STEPS_TO_DELETE")
+             STEPS_TO_DELETE=$(echo "$UNIQUE_STEPS" | head -n "$NUM_STEPS_TO_DELETE" || true)
              STEPS_PATTERN=$(echo "$STEPS_TO_DELETE" | paste -sd '|')
              OUTPUTS_FILES_TO_DELETE=$(echo "$ALL_OUTPUTS" | grep -E "(${STEPS_PATTERN})$" || true)
              
              if [ -n "$OUTPUTS_FILES_TO_DELETE" ]; then
                  NUM_FILES_TO_DELETE=$(echo "$OUTPUTS_FILES_TO_DELETE" | wc -l)
-                 OLDEST_STEP=$(echo "$UNIQUE_STEPS" | head -n 1)
+                 OLDEST_STEP=$(echo "$UNIQUE_STEPS" | head -n 1 || true)
                  NEWEST_DELETE_STEP=$(echo "$STEPS_TO_DELETE" | tail -n 1)
                  
+                 STEPS_TO_KEEP=$(echo "$UNIQUE_STEPS" | tail -n "$OUTPUTS_TO_KEEP")
+                 OLDEST_KEPT_STEP=$(echo "$STEPS_TO_KEEP" | head -n 1 || true)
+                 NEWEST_KEPT_STEP=$(echo "$STEPS_TO_KEEP" | tail -n 1)
+                 
                  echo -e "${YELLOW}======================================================${NC}"
-                 echo -e "${YELLOW}PRE-FLIGHT WARNING: Output Deletion Scheduled${NC}"
-                 echo -e "Found $NUM_STEPS unique timesteps across all files."
-                 echo -e "Target is to keep the latest $OUTPUTS_TO_KEEP timesteps."
-                 echo -e "This will safely delete exactly $NUM_FILES_TO_DELETE files associated with the $NUM_STEPS_TO_DELETE oldest timesteps (from $OLDEST_STEP to $NEWEST_DELETE_STEP)."
-                 echo -e "Note: This will execute ONLY AFTER the backup completes successfully."
+                 echo -e "${YELLOW}PRE-FLIGHT WARNING: Output Deletion on SERVER Scheduled${NC}"
+                 echo -e "Total unique timesteps found on SERVER: $NUM_STEPS"
+                 echo -e "Target timesteps to keep on SERVER: $OUTPUTS_TO_KEEP (from $OLDEST_KEPT_STEP to $NEWEST_KEPT_STEP)"
+                 echo -e "This will permanently delete exactly $NUM_FILES_TO_DELETE older output files from the SERVER (timesteps $OLDEST_STEP to $NEWEST_DELETE_STEP)."
+                 echo -e "Note: This deletion will execute ONLY AFTER the backup completes successfully."
                  echo -e "${YELLOW}======================================================${NC}"
                  
-                 echo -n -e "Authorize this deletion to run after backup? (y/N): " > /dev/tty
-                 read confirm < /dev/tty
-                 if [[ $confirm != [yY] && $confirm != [yY][eE][sS] ]]; then
-                     log_skip "Deletion cancelled. Backup will proceed without deleting output files."
-                     OUTPUTS_FILES_TO_DELETE=""
+                 if [ "$DRY_RUN" = true ]; then
+                     : # Auto-authorized; proceed silently.
                  else
-                     log_success "Deletion authorized."
+                     echo -n -e "Authorize this deletion to run after backup? (y/N): " > /dev/tty
+                     read confirm < /dev/tty
+                     if [[ $confirm != [yY] && $confirm != [yY][eE][sS] ]]; then
+                         log_skip "Output deletion cancelled by user."
+                         OUTPUTS_FILES_TO_DELETE=""
+                         prompt_continue_backup "Output deletion was cancelled."
+                     else
+                         log_success "Deletion authorized."
+                     fi
                  fi
              fi
          fi
@@ -157,6 +174,7 @@ RSYNC_OPTS=(-ah --info=progress2 --log-file="$RSYNC_LOG" -e "ssh -i $SSH_KEY")
 if [ "$DRY_RUN" = true ]; then
     RSYNC_OPTS+=("--dry-run")
     log_step "DRY RUN MODE: No files will be modified."
+    log_success "DRY RUN MODE: Auto-authorizing deletion simulation."
 fi
 
 # --- TRACER CLEANUP ---
@@ -180,7 +198,7 @@ if [ "$DELETE_OLD_TRACERS" = true ]; then
     
     if [ $SSH_STATUS -ne 0 ]; then
         log_error "SSH connection or directory check failed. Skipping tracer deletion."
-        prompt_continue_backup
+        prompt_continue_backup "Tracer deletion was hindered."
     else
         if [ -z "$TRACER_FILES" ]; then
             NUM_TRACERS=0
@@ -194,35 +212,43 @@ if [ "$DELETE_OLD_TRACERS" = true ]; then
             log_skip "Found $NUM_TRACERS tracers, which is <= $TRACERS_TO_KEEP. Nothing to delete."
         else
             NUM_TO_DELETE=$((NUM_TRACERS - TRACERS_TO_KEEP))
-            FILES_TO_DELETE=$(echo "$TRACER_FILES" | head -n "$NUM_TO_DELETE")
+            FILES_TO_DELETE=$(echo "$TRACER_FILES" | head -n "$NUM_TO_DELETE" || true)
+            
+            OLDEST_DELETE_TRACER=$(echo "$FILES_TO_DELETE" | head -n 1 | sed -E 's/.*([0-9]{5})$/\1/' || true)
+            NEWEST_DELETE_TRACER=$(echo "$FILES_TO_DELETE" | tail -n 1 | sed -E 's/.*([0-9]{5})$/\1/')
+            
+            FILES_TO_KEEP=$(echo "$TRACER_FILES" | tail -n "$TRACERS_TO_KEEP")
+            OLDEST_KEPT_TRACER=$(echo "$FILES_TO_KEEP" | head -n 1 | sed -E 's/.*([0-9]{5})$/\1/' || true)
+            NEWEST_KEPT_TRACER=$(echo "$FILES_TO_KEEP" | tail -n 1 | sed -E 's/.*([0-9]{5})$/\1/')
             
             echo -e "${YELLOW}======================================================${NC}"
-            echo -e "${YELLOW}WARNING: You have chosen to delete older tracers.${NC}"
-            echo -e "Total physical tracer files found: $NUM_TRACERS"
-            echo -e "Target physical files to keep: $TRACERS_TO_KEEP"
-            echo -e "Number of oldest tracers to delete: $NUM_TO_DELETE"
-            echo -e ""
+            echo -e "${YELLOW}WARNING: Tracer Deletion on SERVER Scheduled${NC}"
+            echo -e "Total physical tracer files found on SERVER: $NUM_TRACERS"
+            echo -e "Target physical files to keep on SERVER: $TRACERS_TO_KEEP (from $OLDEST_KEPT_TRACER to $NEWEST_KEPT_TRACER)"
+            echo -e "This will permanently delete exactly $NUM_TO_DELETE older tracers from the SERVER (timesteps $OLDEST_DELETE_TRACER to $NEWEST_DELETE_TRACER)."
             echo -e "Note: This preserves exactly $TRACERS_TO_KEEP most recent files, regardless of numbering gaps."
-            echo -e "This will permanently delete exactly $NUM_TO_DELETE older tracers from the server."
             echo -e "${RED}Risk: If the latest tracers are corrupted, you might not have enough history to restart the run.${NC}"
             echo -e "${YELLOW}======================================================${NC}"
             
-            echo -n -e "Are you sure you want to proceed with deletion? (y/N): " > /dev/tty
-            read confirm < /dev/tty
-            echo "User response: $confirm"
-            
-            if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
-                if [ "$DRY_RUN" = true ]; then
-                    log_step "DRY RUN: Would delete $NUM_TO_DELETE tracers."
-                    echo "Would delete from: $(echo \"$FILES_TO_DELETE\" | head -n 1) to $(echo \"$FILES_TO_DELETE\" | tail -n 1)"
-                elif [ -n "$FILES_TO_DELETE" ]; then
-                    log_step "Deleting $NUM_TO_DELETE old tracers..."
-                    echo "$FILES_TO_DELETE" | ssh -i "$SSH_KEY" "$SERVER_HOST" "xargs rm -f"
-                    log_success "Old tracers deleted."
-                fi
+            if [ "$DRY_RUN" = true ]; then
+                log_step "DRY RUN: Would delete $NUM_TO_DELETE tracers."
+                echo "Would delete from: $(echo "$FILES_TO_DELETE" | head -n 1 || true) to $(echo "$FILES_TO_DELETE" | tail -n 1)"
             else
-                log_skip "Deletion cancelled by user."
-                prompt_continue_backup
+                sleep 0.5 # Wait for terminal output to flush before prompting
+                echo -n -e "Are you sure you want to proceed with deletion? (y/N): " > /dev/tty
+                read confirm < /dev/tty
+                echo "User response: $confirm"
+                
+                if [[ $confirm == [yY] || $confirm == [yY][eE][sS] ]]; then
+                    if [ -n "$FILES_TO_DELETE" ]; then
+                        log_step "Deleting $NUM_TO_DELETE old tracers..."
+                        echo "$FILES_TO_DELETE" | ssh -i "$SSH_KEY" "$SERVER_HOST" "xargs rm -f"
+                        log_success "Old tracers deleted."
+                    fi
+                else
+                    log_skip "Deletion cancelled by user."
+                    prompt_continue_backup "Tracer deletion was cancelled."
+                fi
             fi
         fi
     fi
