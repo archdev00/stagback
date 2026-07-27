@@ -33,17 +33,12 @@ LOG_FILE="$LOG_DIR/backup_$(date +%Y%m%d_%H%M%S).log"
 
 
 
-
-
-
-
-
 # ==========================================
 #       USER EDITS NOTHING BELOW
 # ==========================================
 
-MIN_TRACERS_TO_KEEP=35   # Safety limit locked by script author
-MIN_OUTPUTS_TO_KEEP=35   # Safety limit for output files
+MIN_TRACERS_TO_KEEP=60   # Safety limit; change at your own risk!
+MIN_OUTPUTS_TO_KEEP=40   # Safety limit for output files
 
 SERVER_HOST="${SERVER%%:*}"
 SERVER_PATH="${SERVER#*:}"
