@@ -14,7 +14,7 @@ RUN_MIRROR=false      # Set to true to run mirror backup, false to skip
 SHUTDOWN_AFTER=false # Set to true to shut down PC when finished
 DELETE_OLD_TRACERS=true # Set to true to delete older tracers before backup
 TRACERS_TO_KEEP=40       # Number of final tracers to keep
-DELETE_OLD_OUTPUTS=false # Set to true to delete ALL old output files (excluding tracers, .dat, .h5) AFTER backup
+DELETE_OLD_OUTPUTS=false # Set to true to delete ALL old output files (excluding tracers, .dat, .h5, .bin) AFTER backup
 OUTPUTS_TO_KEEP=50       # Number of final timesteps to keep for all output files
 
 # --- PATHS ---
@@ -89,7 +89,7 @@ if [ "$DELETE_OLD_OUTPUTS" = true ]; then
     fi
 
     set +e
-    ALL_OUTPUTS=$(ssh -i "$SSH_KEY" "$SERVER_HOST" "find \"${SERVER_PATH}+op\" -maxdepth 1 -type f -name '*[0-9][0-9][0-9][0-9][0-9]' ! -name '*tra[0-9]*' ! -name '*.dat' ! -name '*.h5'" 2>/dev/null)
+    ALL_OUTPUTS=$(ssh -i "$SSH_KEY" "$SERVER_HOST" "find \"${SERVER_PATH}+op\" -maxdepth 1 -type f -name '*[0-9][0-9][0-9][0-9][0-9]' ! -name '*tra[0-9]*' ! -name '*.dat' ! -name '*.h5' ! -name '*.bin'" 2>/dev/null)
     SSH_STATUS=$?
     set -e
     
@@ -257,14 +257,16 @@ fi
     rsync "${RSYNC_OPTS[@]}" --ignore-existing \
       --exclude='*.dat' \
       --exclude='*.h5' \
+      --exclude='*.bin' \
       "$SERVER" "$ARCHIVE"
 
-    # 2. Update .dat and .h5 files
-    log_step "Step 2/4: Updating .dat and .h5 files in archive..."
+    # 2. Update .dat, .h5, and .bin files
+    log_step "Step 2/4: Updating .dat, .h5, and .bin files in archive..."
     rsync "${RSYNC_OPTS[@]}" \
       --include='*/' \
       --include='*.dat' \
       --include='*.h5' \
+      --include='*.bin' \
       --exclude='*' \
       "$SERVER" "$ARCHIVE"
 
