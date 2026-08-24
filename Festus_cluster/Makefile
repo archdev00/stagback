@@ -13,7 +13,7 @@ export STAGYY_USE_BLAS_SUB = 0
 export STAGYY_HAVE_PNG = 1
 
 export PETSC_DIR=/opt/hpc/public/compiler/gnu/15.2/deps/openmpi/5.0.8/deps/petsc/3.22
-export PETSC_ARCH=""
+export PETSC_ARCH=
 
 # Default values (will be overwritten if PETSc is used)
 STAGYY_F90 =
