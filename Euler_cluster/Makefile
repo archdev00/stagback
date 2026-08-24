@@ -4,7 +4,6 @@
 
 # module load stack/2024-06 gcc/12.2.0 openmpi/4.1.6 hdf5/1.12.2 petsc/3.20.1
 
-The code is compiled.
 
 export STAGYY_HAVE_PETSC   = 1
 export STAGYY_HAVE_MPI     = 1
